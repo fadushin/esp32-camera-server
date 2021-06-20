@@ -70,7 +70,7 @@
 #define EXAMPLE_WIFI_SSID CONFIG_WIFI_SSID
 #define EXAMPLE_WIFI_PASS CONFIG_WIFI_PASSWORD
 
-static const char *TAG = "ESP32-CamServer";
+static const char *TAG = "esp32cam";
 
 static void write_string(const char *key, const char *value);
 static char *read_string(const char *key);
@@ -294,6 +294,7 @@ esp_err_t config_camera_post_httpd_handler(httpd_req_t *req)
                 if (
                     strcmp(param, "QVGA") == 0 || strcmp(param, "CIF") == 0
                     || strcmp(param, "VGA") == 0 || strcmp(param, "SVGA") == 0
+                    || strcmp(param, "XGA") == 0
                     || strcmp(param, "SXGA") == 0 || strcmp(param, "UXGA") == 0
                 ) {
                     ESP_LOGI(TAG, "Setting frame_size");
@@ -484,8 +485,8 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
             ESP_LOGI(TAG, "SYSTEM_EVENT_STA_DISCONNECTED");
             connection_failues++;
             if (connection_failues > 10) {
-                ESP_LOGE(TAG, "Too many connection failures.  Reverting to AP mode.");
-                write_string("wifi_mode", "AP");
+                ESP_LOGE(TAG, "Too many connection failures.  Falling back to AP mode.");
+                write_string("wifi_mode", "fallback");
                 reboot();
             } else {
                 ESP_ERROR_CHECK(esp_wifi_connect());
@@ -614,6 +615,15 @@ static char *get_default_device_name()
 }
 
 
+static char *get_wifi_mode()
+{
+    char *ret = read_string("wifi_mode");
+    if (ret == NULL) {
+        ret = malloc(3);
+        strcpy(ret, "AP");
+    }
+    return ret;
+}
 
 
 static void initialise_wifi(void *arg)
@@ -630,8 +640,19 @@ static void initialise_wifi(void *arg)
     gpio_set_direction(33, GPIO_MODE_OUTPUT);
     gpio_set_level(33, 1);
 
-    char *wifi_mode = read_string("wifi_mode");
-    if (wifi_mode == NULL || strcmp(wifi_mode, "AP") == 0) {
+    char *wifi_mode = get_wifi_mode();
+    if (strcmp(wifi_mode, "fallback") == 0) {
+        char *ssid = get_default_device_name();
+        strcpy((char *) wifi_config.ap.ssid, ssid);
+        free(ssid);
+        strcpy((char *) wifi_config.ap.password, TAG);
+        wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+        wifi_config.ap.max_connection = 4;
+        ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.ap.ssid);
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+        write_string("wifi_mode", "STA"); // for next reboot
+    } else if (strcmp(wifi_mode, "AP") == 0) {
         char *ssid = read_string("wifi_ssid");
         if (ssid == NULL) {
             ssid = get_default_device_name();
@@ -641,7 +662,7 @@ static void initialise_wifi(void *arg)
         if (password != NULL) {
             strcpy((char *) wifi_config.ap.password, password);
         } else {
-            strcpy((char *) wifi_config.ap.password, "opensesame");
+            strcpy((char *) wifi_config.ap.password, TAG);
         }
         wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
         wifi_config.ap.max_connection = 4;
